@@ -1,0 +1,102 @@
+---
+title: "Intercept change`s effect on shift detection"
+author: "Qing Yu(Sabrina)"
+date: "October 4, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Goal of the study
+In this report, we use the version 1.28 of `l1ou`. From the bs_shift report, we can see the number of  false-positives close to the root decreased when we set the intercept as 0.The reason is that if the intercept is not zero, the root is considered as one of the shift edge. So, there might be some false-positives close to it. Now, the goal of this report is to see whether the existance of the intercept will influence the shift that is detected.The result is that the existance of the intercept does change the shift edges that is detected. 
+
+```{r,include=FALSE}
+library('phylolm')
+library('l1ou')
+```
+
+# Generating data for the first sample.
+In this case, I do not include the traits and part of tree that derive the last 10 tips for the tree.The `eModel` and `eModel2` are identical besides their intercepts. I try to compare if the shftedges detected by the two models are different or not. 
+
+```{r, eval=FALSE}
+data(lizard.tree, lizard.traits)
+tr1=drop.tip(lizard.tree,91:100)
+trait1=lizard.traits[,1][-(91:100)]
+lizard <- adjust_data(tr1,trait1)
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+eModel2 <- estimate_shift_configuration(lizard$tree, lizard$Y+400)
+save(eModel, file="eModelint.RData")
+save(eModel2, file="eModelint2.RData")
+```
+
+```{r}
+data(lizard.tree, lizard.traits)
+# Have checked the sequence of the tip labels are the same
+all.equal(names(lizard.traits[,1]),lizard.tree$tip.label)
+```
+This is to check whether `lizard.tree` and `lizard.traits` have the same sequence of species. 
+
+
+# Generating data for the second sample.
+In this case, I do not include the traits and part of tree that derive the No.81 to No.90 tips for the tree.The `eModel` and `eModel2` are identical besides their intercepts. I try to compare if the shftedges detected by the two models are different or not. 
+```{r, eval=FALSE}
+data(lizard.tree, lizard.traits)
+tr2=drop.tip(lizard.tree,81:90)
+trait2=lizard.traits[,1][-(81:90)]
+all.equal(names(trait2),tr2$tip.label)
+lizard <- adjust_data(tr2,trait2)
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+eModel2 <- estimate_shift_configuration(lizard$tree, lizard$Y+400)
+save(eModel, file="eModelint21.RData")
+save(eModel2, file="eModelint22.RData")
+```
+
+# Generating data for the third sample.
+In this case, I do not include the traits and part of tree that derive the the first 10 tips for the tree.The `eModel` and `eModel2` are identical besides their intercepts. I try to compare if the shftedges detected by the two models are different or not. 
+```{r, eval=FALSE}
+data(lizard.tree, lizard.traits)
+tr3=drop.tip(lizard.tree,1:10)
+trait3=lizard.traits[,1][11:100]
+all.equal(names(trait3),tr3$tip.label)
+lizard <- adjust_data(tr3,trait3)
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+eModel2 <- estimate_shift_configuration(lizard$tree, lizard$Y+700)
+save(eModel, file="eModelint31.RData")
+save(eModel2, file="eModelint32.RData")
+```
+
+# Check if the shift edges for two models are the same or not for the first model
+```{r}
+load('eModelint.RData')
+load('eModelint2.RData')
+eModel$intercept
+eModel2$intercept
+all.equal(sort(eModel$shift.configuration),sort(eModel2$shift.configuration))
+```
+The shift edges that has been detected from the two models are the same.
+
+# Check if the shift edges for two models are the same or not for the second model
+```{r}
+load('eModelint21.RData')
+load('eModelint22.RData')
+eModel$intercept
+eModel2$intercept
+all.equal(sort(eModel$shift.configuration),sort(eModel2$shift.configuration))
+eModel$shift.configuration
+eModel2$shift.configuration
+```
+The shift edges that has been detected from the two models are not the same.
+
+# Check if the shift edges for two models are the same or not for the third model
+```{r}
+load('eModelint31.RData')
+load('eModelint32.RData')
+eModel$intercept
+eModel2$intercept
+all.equal(sort(eModel$shift.configuration),sort(eModel2$shift.configuration))
+eModel$shift.configuration
+eModel2$shift.configuration
+```
+The shift edges that has been detected from the two models are not the same.

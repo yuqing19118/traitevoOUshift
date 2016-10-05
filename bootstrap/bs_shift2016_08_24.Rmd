@@ -1,0 +1,538 @@
+---
+title: "Bootstrap shift support by different procedures"
+author: "Cecile Ane and Qing (Sabrina) Yu"
+date: "Oct 4, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Goal of the study
+
+In this report, my goal is to find the procedure that gives "most accurate" support values for shifts.
+I first estimate the shift configuration on a dataset based on one of 3 criteria: "AICc","BIC","pBIC" (first criterion).
+Then, this model is used by the bootstrap procedure to simulate bootstrap data.
+Each bootstrap data is analyzed with AICc, BIC or pBIC (second criterion).
+There are 9 combinations of criteria (first + second). I compared the bootstrap support values from these nine procedures, on simulated data described below. I found that by using AIC + pBIC,
+I got some of the 8 shifts with high bootstrap support and rare high support 
+for wrong edges (edges where no shifts were simulated). 
+
+ 
+AICc + pBIC gave high support at an acceptable rate (for 0.5 wrong edges on average)
+Other procedures gave high support for less than 0.5 wrong edges on average,
+but they gave low support for the true shifts.
+So, it seems that AICc_pBIC is the "most accurate" procedure in a conservative way.  
+
+
+
+# Simulation procedure
+
+I used the lizard tree from the `phylolm` package and associated trait data on these lizard
+species (just the first trait, which is the first PC axis from a PCA).
+I analyzed this trait to estimate the shifts in trait evolution using the function
+`estimate_shift_configuration` from `l1ou` package. The analysis takes a little bit of
+time (about 2 minutes), so I saved the results in an R data file:
+
+```{r eval=FALSE,include=TRUE}
+setwd("~/R/traitevoOUshift/bootstrap")
+library(l1ou)
+data(lizard.tree, lizard.traits)
+lizard <- adjust_data(lizard.tree, lizard.traits[,1])
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+save(eModel,file="eModel.RData")
+```
+
+The estimated shift configuration can be loaded quickly now:
+
+```{r, include=FALSE}
+setwd("~/R/traitevoOUshift/bootstrap")
+require('ape')
+require('l1ou')
+library(plotrix)
+load('Y_res2016_09_02.RData')
+load('boot_res2016_09_30.RData')
+load('seed_res2016_09_02.RData')
+load("eModel2016_09_02.RData")
+
+```
+
+
+```{r}
+critlist = c("AICc","BIC","pBIC")
+n_edges=length(eModel$tree$edge.length) # Total number of edges
+n_edges
+shiftedge=eModel$shift.configuration # Those are the indices of shift edges
+shiftedge
+otheredge=(1:n_edges)[-shiftedge] # other edges: those without a true shift
+head(otheredge)
+truealpha=eModel$alpha
+# truealpha=truealpha/4
+# y0=0
+y0=eModel$intercept
+truetheta   = l1ou:::convert_shifts2regions(eModel$tree, 
+  eModel$shift.configuration, eModel$shift.values)+y0
+nShifts   = length(eModel$shift.configuration)
+n_tips=length(eModel$tree$tip.label)
+critlist = c("AICc","BIC","pBIC")
+sigma2=eModel$sigma2
+```
+The tree has `r n_tips` tips, and so `r n_edges` edges total.
+There are `r nShifts` edges that were detected with a shift, numbered 
+`r shiftedge`. On these edges, the changes in the optimal value were
+(shift magnitude):
+`r eModel$shift.values`.
+The other parameters were estimated to be $\alpha=$ `r truealpha`, 
+and $\sigma^2=$ `r sigma2`.
+
+Now I used this model to simulate new data. Then, I analyzed each simulated data set with 
+each of the 9 bootstrap procedures described in the introduction. I named this procedure
+based on the first and second criteria (to analyze the original data and then to analyze
+its bootstrap replicates):
+`aic_aic`, `aic_bic`, `aic_pbic`, `bic_aic`, `bic_bic`, `bic_pbic`, `pbic_aic`, `pbic_bic`, and `pbic_pbic`.
+The code to run the simulation is shown below. 
+In particular, I choose to set the maximum allowed number of shifts to 20 instead of the 
+default (half the number of tips) to make the simulation run in a reasonable time frame.
+
+I divided the analysis of 100 simulated datasets into 10 sets of
+10 datasets, and I used 10 different machines (each handled 1 set of 10 data sets).
+This simulation took 18 hours for each machine. I used 4 cores from each machine, through
+the options `multicore` and `nCores` of the bootstrapping function.
+
+```{r, eval=FALSE, include=TRUE}
+## simulation using bootstrap method
+mnshifts = 20 # allowed maximum number of shifts. 
+# The default is 50 = 100 tips/2 but too slow, 5 sim *5boot_itr took 40 hours.
+mnshift_boot = 20 # check if it doesn't take too long
+## simulation using bootstrap method
+do.boot.sim = function(n_sim , nbootItr, seed, filename, numcores=1){
+  srand(seed)
+  #initiate all tables
+  boot_pro=matrix(nrow = (9*n_sim), ncol=n_edges+2,data=NA) # two extra columns for criterion1 and 2
+  irow=1
+  Y_table=matrix(data=NA,nrow=n_sim,ncol=n_tips)
+  
+  for (i in 1:n_sim){
+    Y  <- rTraitCont(eModel$tree, "OU", theta=truetheta, 
+                     alpha=truealpha, 
+                     sigma=sqrt(eModel$sigma2),root.value = y0)
+    Y_table[i,]=Y
+    #change different criterion when bootstrapping
+    for (criterion1 in critlist){
+      bootmodel=estimate_shift_configuration(eModel$tree,Y,criterion=criterion1, max.nShifts=mnshifts)
+      for (criterion2 in critlist){
+        bootmodel$l1ou.options$criterion = criterion2
+        bootmodel$l1ou.options$max.nShifts = mnshift_boot
+        bootB=l1ou_bootstrap_support(bootmodel, nItrs=nbootItr, multicore=T, nCores=numcores)
+        boot_pro[irow,1]=criterion1
+        boot_pro[irow,2]=criterion2
+        boot_pro[irow,3:(n_edges+2)]=bootB
+        irow=irow+1
+      }
+    }
+  }
+  save(seed,boot_pro,Y_table, file= filename)
+  return (boot_pro)
+}
+# Call this function 10 times, each time to do 10 simulations with 100 iterations per simulation 
+myresultsL <- do.boot.sim(100, 100, seed=1235, filename="test", numcores=4)
+# seeds that were used for the 10 runs:
+# seed        1235
+# seed     127643435
+# seed      12343445
+# seed      12332375
+# seed      12787875
+# seed      21565385
+# seed       7154895
+# seed         95475
+# seed     651789823
+# seed         12345
+```
+
+
+# Results: summaries and visualizations
+
+I first created 9 tables, one for each of the 9 procedures,
+to contain the bootstrap value for each edge from each simulated dataset.
+With 100 simulated data sets and 198 edges, that makes 9 tables each with
+100 rows and 198 columns.
+
+```{r}
+boot_pro=as.data.frame(boot_rep)
+for( j in 3:200){
+  boot_pro[,j]=as.numeric(as.character(boot_pro[,j]))
+}
+# delete the first two columns, which contain the labels of different procedures, like AICc or BIC
+aic_aic = boot_pro[ boot_pro[,1]=="AICc" & boot_pro[,2]=="AICc" ,-(1:2) ]
+aic_bic = boot_pro[ boot_pro[,1]=="AICc" & boot_pro[,2]=="BIC" ,-(1:2)  ]
+aic_pbic = boot_pro[ boot_pro[,1]=="AICc" & boot_pro[,2]=="pBIC" , -(1:2) ]
+bic_aic = boot_pro[ boot_pro[,1]=="BIC" & boot_pro[,2]=="AICc" , -(1:2) ]
+bic_bic = boot_pro[ boot_pro[,1]=="BIC" & boot_pro[,2]=="BIC" , -(1:2) ]
+bic_pbic = boot_pro[ boot_pro[,1]=="BIC" & boot_pro[,2]=="pBIC" , -(1:2) ]
+pbic_aic = boot_pro[ boot_pro[,1]=="pBIC" & boot_pro[,2]=="AICc" , -(1:2) ]
+pbic_bic = boot_pro[ boot_pro[,1]=="pBIC" & boot_pro[,2]=="BIC" , -(1:2) ]
+pbic_pbic = boot_pro[ boot_pro[,1]=="pBIC" & boot_pro[,2]=="pBIC" , -(1:2) ]
+
+# creating the vector of tables
+n=9
+vectorOfTables <- vector(mode="list",length=n)
+vectorOfTables[[1]]=aic_aic
+vectorOfTables[[2]]=aic_bic
+vectorOfTables[[3]]=aic_pbic
+vectorOfTables[[4]]=bic_aic
+vectorOfTables[[5]]=bic_bic
+vectorOfTables[[6]]=bic_pbic
+vectorOfTables[[7]]=pbic_aic
+vectorOfTables[[8]]=pbic_bic
+vectorOfTables[[9]]=pbic_pbic
+
+plot_name=c("AICc_AICc","AICc_BIC","AICc_pBIC","BIC_AICc","BIC_BIC",
+            "BIC_pBIC","pBIC_AICc","pBIC_BIC","pBIC_pBIC")
+# show first 6 rows and 10 columns of aic_aic and aic_pbic tables
+head(aic_aic[,1:10])
+head(aic_pbic[,1:10])
+```
+
+
+I summarized the bootstrap support (BS) values by their mean, standard deviation, minimum and maximum
+across the 100 simulations, for each edge separately.
+
+#### Mean BS and other summaries, for shift edges
+```{r}
+means_sum=matrix(data=NA,nrow=9,ncol=length(shiftedge)) # mean of BS of shift edges.
+sds_sum=matrix(data=NA,nrow=9,ncol=length(shiftedge)) # standard deviation of BS of shift edges.
+mins_sum=matrix(data=NA,nrow=9,ncol=length(shiftedge)) # minimal number of BS of shift edges.
+all_means=matrix(data=NA,nrow=9,ncol=n_edges) # mean of BS of all edges across 100 simulations.
+
+for (i in 1:9){
+  all_means[i,]=colMeans(vectorOfTables[[i]])
+  means_sum[i,]=colMeans(vectorOfTables[[i]][,shiftedge])
+  sds_sum[i,]=apply(vectorOfTables[[i]],2,sd)[shiftedge]
+  mins_sum[i,]=apply(vectorOfTables[[i]],2,min)[shiftedge]
+}
+round(means_sum,3) # Mean BS: row = procedure (like aic_aic), column = edge with shift
+round(sds_sum,3)  # SD of BS: row = procedure (like aic_aic), column = edge with shift
+```
+
+Now we can visualize these BS means, one for each edge:
+
+```{r}
+matplot(means_sum, type = c("o"),pch=1,col = 1:8,ylab="mean BS for shift edges",axes=F)
+axis(side=1,at=1:9,labels = plot_name,cex.axis=0.7)
+axis(side=1,at=2,labels = plot_name[2],cex.axis=0.7)
+axis(side=1,at=3,labels = plot_name[3],cex.axis=0.7)
+axis(side=1,at=4,labels  = plot_name[4],cex.axis=0.7)
+axis(side=1,at=7,labels = plot_name[7],cex.axis=0.7)
+axis(side=1,at=9,labels = plot_name[9],cex.axis=0.7)
+axis(side=2,ylim=c(0:0.6))
+mtext("mean bootstrap support on edges that truly had a shift. 1 line = 1 edge",
+      line=1,side=3,las=0)
+```
+
+We see that AICc + AICc gives the highest support for shifts on these edges. 
+We also see that all bootstrap support values tend to be low (given that shifts were simulated on these
+edges).
+This might be because the magnitudes of the shifts were small.
+But there are systematic differences between edges: two of them (in yellow and pink) tend 
+to be supported much more than the others. Another two (green and gray) are almost never
+supported (with mean BS<0.1 across all procedures). 
+
+#### Mean BS and other summaries, for non-shift edges
+
+```{r}
+meano_sum=matrix(data=NA,nrow=9,ncol=n_edges-length(shiftedge))
+sdo_sum=matrix(data=NA,nrow=9,ncol=n_edges-length(shiftedge))
+maxo_sum=matrix(data=NA,nrow=9,ncol=n_edges-length(shiftedge))
+# will contain the mean, standard deviation, max bootstrap support
+# of non-shift edges across 100 simulations.
+
+# now filling in the values
+for (i in 1:9){
+  meano_sum[i,]=colMeans(vectorOfTables[[i]][,otheredge])
+  sdo_sum[i,]=apply(vectorOfTables[[i]],2,sd)[otheredge]
+  maxo_sum[i,]=apply(vectorOfTables[[i]],2,max)[otheredge]
+}
+
+round(meano_sum[,1:10],3) # Mean BS: row = procedure (like aic_aic), column = edge with no shift
+round(sdo_sum[,1:10],3) # SD BS: row = procedure (like aic_aic), column = edge with no shift
+```
+
+Now we can again visualize these BS means, one for each edge:
+
+```{r}
+#Plotting the means,sds
+layout(matrix(1, 1))
+matplot(meano_sum, type = c("o"),pch=1,ylab="mean BS of non-shift edges",axes=F)
+axis(side=1,at=1:9,labels = plot_name,cex.axis=0.7)
+axis(side=1,at=2,labels = plot_name[2],cex.axis=0.7)
+axis(side=1,at=3,labels = plot_name[3],cex.axis=0.7)
+axis(side=1,at=4,labels = plot_name[4],cex.axis=0.7)
+axis(side=1,at=7,labels = plot_name[7],cex.axis=0.7)
+axis(side=1,at=9,labels = plot_name[9],cex.axis=0.7)
+axis(side=2,ylim=c(0:0.6))
+mtext("mean bootstrap support on edges that do not have a shift. 1 line = 1 edge",
+      line=3,side=3,las=0)
+```
+We see quite a high bootstrap support overall when the second criterion is AICc.
+We also see that 2 edges stand out (in green and pink) as having very high bootstrap support
+(up to 40%), even though there were no shifts simulated on these edges.
+The two edges are shown below:
+
+```{r}
+which(meano_sum[1,]>.2) #  189th in "otheredge" = 197 in table with all edges.
+```
+They are both edges close to the tips (based on the plot below).
+These two edges have bootstrap support `r meano_sum[1,30]` and `r meano_sum[1,189]` with AICc+AICc
+one average. We can look at the distribution (not just the mean) of their BS across the 100 simulations:
+
+```{r}
+layout(matrix(1:4, 2, 2, byrow=TRUE))
+#hist(aic_aic[,otheredge[30]],breaks=20,xlab="bootstrap support",
+ #    main="edge 31 (no shift), AIC+AIC",col="tan")# almost flat between 0 and 1
+#hist(aic_pbic[,otheredge[30]],breaks=20,xlab="bootstrap support",
+#     main="edge 31, AIC+pBIC ", col="green", xlim=0:1)# unimodal near 0
+hist(aic_aic[,otheredge[189]],breaks=20,xlab="bootstrap support",
+     main="edge 197 (no shift), AIC+AIC",col="tan")# almost flat between 0 and 1
+hist(aic_pbic[,otheredge[189]],breaks=20,xlab="bootstrap support",
+     main="edge 197, AIC+pBIC",col="green", xlim=0:1)# unimodal near 0
+```
+These histrograms are uni-modal. In the plots of AICc + AICc,
+BS is almost uniformly distributed from 0 to 1. With AIC + pBIC, the BS values are much lower, most of
+them near BS=0, but still unimodal. 
+
+### Distribution of BS on shift edges to find a threshold for "high" versus "low" support
+
+Next, we can look at the distribution of bootstrap support on edges with
+a true shift, to see what threshold would be most appropriate to call "high" support,
+given that our shifts were of small magnitude and were difficult to detect
+during the bootstrap procedure. We are going to look at the 2 shifts that were easiest to detect.
+
+```{r}
+layout(matrix(1:4, 2, 2, byrow=TRUE))
+hist(aic_aic[,shiftedge[4]],breaks=20,xlab="bootstrap support",
+     main="edge 74 (with shift), AIC+AIC",col="tan")
+hist(aic_pbic[,shiftedge[4]],breaks=20,xlab="bootstrap support", xlim=0:1,
+     main="edge 74, AIC+pBIC ", col="green")
+hist(aic_aic[,shiftedge[5]],breaks=20,xlab="bootstrap support",
+     main="edge 14 (with shift), AIC+AIC",col="tan")
+hist(aic_pbic[,shiftedge[5]],breaks=20,xlab="bootstrap support",
+     main="BS of edge 14, AIC+pBIC",col="green")
+```
+
+These plots are all bimodal: with a big chunk at/near 0, and another between 0.4 to 1.
+These plots make us think that a BS of 0.4 could be a useful cut-off point to differentiates
+high versus low bootstrap support. Another reason for this is that for edges with no shifts 
+(previous section), few simulated data had BS below 0.4.
+
+
+
+
+# Display of edge BS means and frequency of high support
+
+Here we display results for each edge, summarized across all simulated data. 
+Below, the plot on the left shows the mean bootstrap support for each edge, if it is 0.05 or higher.
+The plot on the right shows, for each edge, the proportion of replicates who had a BS of 40% of higher
+for that edge (this proportion is not shown if it is lower than 0.01).
+
+These plots are shown for 2 procedures only: the most liberal AICc+AICc and our recommended
+procedure: AICc+pBIC.  
+
+```{r myplot,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+plotShiftSupport = function(k){
+  layout(matrix(1:2, 1, 2))
+  bs_high=colSums(vectorOfTables[[k]]>=0.4)
+  pro_high=bs_high/100
+  ind_high=which(pro_high>0.01)
+  ind_means=which(all_means[k,]>=0.05)
+  ins_ps=intersect(shiftedge,ind_high)
+  ins_po=intersect(otheredge,ind_high)
+  ins_ms=intersect(shiftedge,ind_means)
+  ins_mo=intersect(otheredge,ind_means)
+  list =c(1,2,4,7) # those methods have indices from ind_means that are not shift edges.
+  plot(eModel$tree,show.tip.label = F,main=plot_name[k],sub=
+"Blue: edges with a true shift. 
+Pink: edges with no shift.",font=8)
+  edgelabels(round(all_means[k,ins_ms],2),ins_ms,col="blue",frame="none")
+  if (k %in% list){
+  edgelabels(round(all_means[k,ins_mo],2),ins_mo,col="pink",frame="none")
+  }
+  mtext(text ="Mean bootstrap support across simulations.
+Not shown if < 0.05.",font=6,line=-1)
+  plot(eModel$tree,show.tip.label = F,main=plot_name[k],sub=
+"Red: edges with a true shift. 
+Green: edges with no shift.",font=8)
+  edgelabels(round(pro_high[ins_ps],2),ins_ps,col="red",frame="none")
+  edgelabels(round(pro_high[ins_po],2),ins_po,col="green",frame="none")
+  mtext(text ="Proportion of replicates with BS >=0.4.
+Not shown if <= 0.01.", line=-1)
+}
+plotShiftSupport(1)
+```
+
+For AICc+AICc, 2 shift edges have BS>=0.4 in a reasonable proportion of simulated data: 57% and 62%
+(still, this is not very high).
+Another 4 shift edges have a BS>=0.4 between 21% and 32% of the replicates.
+The remaining 2 edges with a shift have "high" support in 12% or less of the replicates.
+Many non-shift edges have "high" BS in 6% or more of the simulated data.
+The 2 weird non-shift edges have "high" support in 40% and 44% of the replicates,
+which is very high compared to the support found for shift edges.
+
+```{r myplot4, echo=TRUE, fig.height=12, fig.width=8, dpi=300}
+plotShiftSupport(3)
+```
+
+For AICc+pBIC, only one non-shift edge has BS>=0.4 in 6% or more of the simulated data.
+The 2 best support shift edges have high BS in 25% and 62% of the simulated data.
+All remaining 6 shift edges have BS above 0.4 in 8% or less of the replicates.
+
+For the figures for all the 9 procedures, please see file `prop_plots.pdf`.
+
+```{r myplot3, eval=FALSE, include=TRUE}
+pdf("prop_plots.pdf", width=8.5, height=11)
+layout(matrix(1:2, 1, 2))
+for (k in 1:9){ # kth row = kth procedure. k=1=the first row=aic_aic
+  plotShiftSupport(k)
+}
+dev.off()
+```
+The results for the  procedures not shown above are summarized below:
+
+For AICc+BIC, the 2 shifts that were easiest to detect both had the mean bootstrap support of 0.13.
+
+When the first criterion is BIC, many non-shift edges have high support in 5% or more of the
+simulation replicates. One of the shift edges has high support in <= 1% of the replicates.
+The 2 most highly supported shifts have mean BS of 0.23 and 0.19 when the second criterion is AICc.
+
+When pBIC was the first criterion, non-shift edges tended to have low support,
+but 6 true shifts had high BS in 2% of less of simulated data.
+
+
+# Overall number of false and true positives
+
+We now look at all edges with high support for each given replicate.
+We define a false positive as a non-shift edge that had the bootstrap support of 0.4 or higher.
+A true positive is a shift edge with the bootstrap support of 0.4 or higher.
+For each simulated data, we counted the number of false positives and the number
+of true positives, and then we calculated the mean and standard deviation of these
+false and true positives across 100 replicates.
+
+```{r}
+falist=matrix(data=NA,nrow=9,ncol=100) # number of non-shift edges with high BS: row=procedure, col=simulated data
+trulist=matrix(data=NA,nrow=9,ncol=100) # number of shift edges  with high BS
+for (k in 1:9){
+  for (i in 1:100){
+    falist[k,i]=sum(vectorOfTables[[k]][i,otheredge]>=0.4)
+    trulist[k,i]=sum(vectorOfTables[[k]][i,shiftedge]>=0.4)
+  }
+}
+
+# mean and sd of true and false-positive number for each procedure
+mean_fal=rowMeans(falist)
+sd_fal=apply(falist,1,sd)
+mean_tru=rowMeans(trulist)
+sd_tru=apply(trulist,1,sd)
+
+summ_table=data.frame(meanFP=mean_fal, sdFP=sd_fal, meanTP=mean_tru, sdTP=sd_tru)
+summ_table$crit1=c("AICc","AICc","AICc","BIC","BIC","BIC","pBIC","pBIC","pBIC")
+summ_table$crit2=c("AICc","BIC","pBIC","AICc","BIC","pBIC","AICc","BIC","pBIC")
+summ_table
+
+xpos = c(1,2,3)
+j=c(1,4,7) # procedures with aic as the second criterion
+layout(matrix(1, 1))
+interaction.plot(summ_table[,5],summ_table[,6],mean_fal,col=c("blue","gray","red"),
+                 main="Mean number of false positives",
+                 xlab="first criterion: on original data",
+                 ylab="mean # of false positives",
+                 trace.label="second criterion:\non bootstrap data",ylim=c(0,6))
+
+# Add confidence interval on each point
+for (m in critlist) {
+  if (m=="AICc"){ 
+    add=F
+    meanplot=plotCI(xpos+0.03*(1-0.5*add),mean_fal[j],2*sd_fal[j]/10,
+                    main ="", axes=F, add=T,pch=15,sfrac=0,col="blue")
+  }
+  if (m == "BIC") {
+    add=T
+    meanplot=plotCI(xpos+0.05*(1-add),mean_fal[j+1],2*sd_fal[j+1]/10,
+                    main ="",ylab="",add=add,pch=16,sfrac=0,col="gray")
+  } 
+  if (m=="pBIC"){ add=T
+  meanplot=plotCI(xpos+0.05*(1-1.5*add),mean_fal[j+2],2*sd_fal[j+2]/10,
+                  main ="",axes=F, add=T,pch=17,sfrac=0, col="red")
+  }
+}
+
+interaction.plot(summ_table[,5],summ_table[,6],mean_tru,col=c("blue","gray","red"),
+                 main="Mean number of true positives",
+                 xlab="first criterion: on original data",
+                 ylab="mean # of true positives",
+                 trace.label="second criterion:\non bootstrap data",ylim=c(0,6))
+# Add confidence interval on each point
+for (m in critlist) {
+  if (m=="AICc"){ 
+    add=F
+    meanplot=plotCI(xpos+0.03*(1-0.5*add),mean_tru[j],2*sd_tru[j]/10,
+                    main ="", axes=F, add=T,pch=15,col="blue",sfrac=0)
+  }
+  if (m == "BIC") {
+    add=T
+    meanplot=plotCI(xpos+0.05*(1-add),mean_tru[j+1],2*sd_tru[j+1]/10,
+                    main ="",ylab="",add=add,pch=16,col="gray",sfrac=0)
+  } 
+  if (m=="pBIC"){ add=T
+  meanplot=plotCI(xpos+0.05*(1-1.5*add),mean_tru[j+2],2*sd_tru[j+2]/10,
+                  main ="",axes=F, add=T,pch=17,sfrac=0,col="red")
+  }
+}
+
+```
+
+When AICc is the first criterion, then the second criterion can change the mean number of false positives
+and true positives significantly: with AICc as the second criterion again, the mean number of false positive 
+and of true positives is larger than with BIC or pBIC.
+When BIC or pBIC is the first criterion, the second criterion has little impact on the number of false/true positives. There are fewer true positives with pBIC than with BIC (as first criterion), for a similar number of false positives. 
+
+The distribution of false and true positives is unimodal in all cases. Only 2 procedures are shown below:
+the most liberal AICc+AICc and our recommended procedure AICc+pBIC:
+
+```{r}
+layout(matrix(1:2, 1, 2))
+# create histgram of false-positive BS for each procedure
+hist(falist[1,],main=plot_name[1],breaks=40,col=1,sub="Number of false positives",xlab="")
+hist(falist[3,],main=plot_name[3],breaks=40,col=3,sub="Number of false positives",xlab="")
+
+# create histgram of true-positive BS for each procedure
+hist(trulist[1,],main=plot_name[1],breaks=40,col=2,sub="Number of true positives",xlab="")
+hist(trulist[3,],main=plot_name[3],breaks=40,col=4,sub="Number of true positives",xlab="")
+```
+
+
+Most of the time, 
+AICc + AICc lead to 2-9 false positives and 1-4 true positives, and
+AICc + pBIC lead to 0-2 false positives and 0-2 true positives.
+
+See files `falist_plots.pdf` and  `trulist_plots.pdf` for the false and true positive histograms with other procedures.
+
+```{r myplot2, eval=FALSE, include=TRUE}
+# create histgram of false-positive BS for each procedure
+pdf("falist_plots.pdf", height=10.5, width=8.5)
+par(mfrow=c(2,2))
+for (k in 1:9){
+  hist(falist[k,],main=plot_name[k],breaks=40,col=k,sub="Number of false positives",xlab="")
+}
+dev.off()
+
+# create histgram of true-positive BS for each procedure
+pdf("trulist_plots.pdf", height=10.5, width=8.5)
+par(mfrow=c(2,2))
+for (k in 1:9){
+  hist(trulist[k,],main=plot_name[k],breaks=40,col=k,sub="Number of true positives",xlab="")
+}
+dev.off()
+```
+
+
+
