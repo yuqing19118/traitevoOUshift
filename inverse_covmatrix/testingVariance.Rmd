@@ -2,7 +2,7 @@
 title: "contrast variance by randomroot and fixedroot"
 author: "Cecile Ane and Qing Yu(Sabrina)"
 date: "October 6th, 2016"
-output: pdf_document
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
