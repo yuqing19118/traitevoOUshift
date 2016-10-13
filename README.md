@@ -12,8 +12,8 @@ variance and sample distribution.
 The bootstrap method is also beneficial for biostatistics, especially in the study of the   
 evolutionary tree. In the real world, the data that has been collected is rare for each species,   
 so using bootstrap method can produce a larger sample size and more accurate results for  
-further analysis. In my research, I focused on the methodology of the bootstrap method on the phylogenetic   
-tree which is a diagram showing the evolutionary relationships among different species.  
+further analysis. In my research, I focused on the methodology of the bootstrap method on the  
+phylogenetic tree which is a diagram showing the evolutionary relationships among different species.  
 
 ## Overview of the research
 
