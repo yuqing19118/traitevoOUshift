@@ -1,8 +1,21 @@
-The files in this repository are used to find the procedure that gives “most accurate” support values for shifts. 
+The files in this repository are used to find the procedure that gives bootstrap support that measures shifts. 
 The `bs_shift.RMD`file contains all the codes for bootstap procedure and analysis on comparing which method is the best on detecting shifts.
 
-While trying to pursue my goal, I have found out there are errors in the package `l1ou` that needs to be fixed. 
-Here is a summary of report I have generated using the updated package of `l1ou` and working on different issues.
+While trying to pursue my goal, professor Cecile and I have found out there are errors in the package `l1ou` that needs to be fixed. 
+
+# Methodology
+
+For this study, I used lizard data from "l1ou" R package and some analytic functions from "phylolm".   
+These two R packages provide functions to study trait evolution from the data and help to detect   
+evolutionary shifts faster and more precisely. I first estimated the shift configuration on a dataset  
+based on one of 3 criteria: "AICc", "BIC" and "pBIC" (first criterion). Then, the model of this shift   
+configuration was used to simulate bootstrap support values of shifts based on   
+"AICc", "BIC" or "pBIC" (second criterion). There were nine combinations of the first and second criterion.  
+I compared the bootstrap support values from these nine procedures and found out that AICc_pBIC was the most   
+accurate procedure in a conservative way. AICc_pBIC can detect all the shifts with fewer false-positives;   
+this happens when some edges which do not contain shift are detected as shift edges with high support.  
+
+Reports
 ---------------------------------------
 2016-10-08 Version 1.28 Regenerate the report based on the new version of `l1ou`
 https://yuqing19118.github.io/bs_shift2016_08_24.html
