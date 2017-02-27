@@ -2,7 +2,9 @@
 title: "Estimate contrast with known alpha"
 author: "Qing (Sabrina) Yu"
 date: "Feb 22,2017"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -32,20 +34,25 @@ library(phylolm)
 data(lizard.tree, lizard.traits)
 lizard <- adjust_data(lizard.tree, lizard.traits[,1])
 n_tips=length(lizard$tree$tip.label) # Total number of tips
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+save(eModel,  file = "eModel_2_27.RData")
 ```
 
 This trait was analyzed to estimate the shifts in trait evolution using the function
 `fit_OU` from the `l1ou` package. 
 
 ```{r}
-load('eModel_2_5.RData')
-shift_config=eModel$shift.configuration
-shiftnode=lizard$tree$edge[shift_config,1]-n_tips
+load("eModel_2_27.RData")
+data(lizard.tree, lizard.traits)
+lizard <- adjust_data(lizard.tree, lizard.traits[,1])
+truealpha=eModel$alpha
 y0=eModel$intercept
 truetheta = y0 + l1ou:::convert_shifts2regions(eModel$tree, 
                                 eModel$shift.configuration, eModel$shift.values)
-truealpha=eModel$alpha
+nShifts   = length(eModel$shift.configuration) # Total number of shifts
+n_tips=length(eModel$tree$tip.label) # Total number of tips
 sigma2=eModel$sigma2
+shiftnode= eModel$tree$edge[eModel$shift.configuration,1]-n_tips # internal nodes with shift
 othernode=(1:(n_tips-1))[-shiftnode] # Other nodes: those without a true shift
 ```
 
@@ -68,16 +75,16 @@ n_sim=100000
 Y_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
 set.seed(1293)
 for (i in 1:n_sim) {
-  Y_table[i,]  <- rTraitCont(eModel$tree, "OU", theta=truetheta, 
+  Y  <- rTraitCont(eModel$tree, "OU", theta=truetheta, 
                  alpha=truealpha, 
-                 sigma=sqrt(sigma2), root.value=y0)
+                 sigma=sqrt(eModel$sigma2), root.value=y0)
+  Y_table[i,]=Y
 }
-colnames(Y_table)=eModel$tree$tip.label
-save(Y_table, file="Y_table_2_5.RData")
+save(Y_table, file="Y_table_2_27.RData")
 ```
 
 ```{r}
-load("Y_table_2_5.RData")
+load("Y_table_2_27.RData")
 len=dim(Y_table)[1]
 ```
 # Estimation Procedure
@@ -100,16 +107,16 @@ and the contrasts behave as expected.
 
 use Y table, call contrasts table "contrast_table1"
 ```{r,eval=F}
-contrast_table1=matrix(nrow=n_sim, ncol=n_tips, data=NA)
-RE = sqrt_OU_covariance(eModel$tree, alpha=truealpha, 
-                        root.model = eModel$l1ou.options$root.model,
+REf = sqrt_OU_covariance(lizard.tree, alpha=truealpha, 
+                        root.model =  eModel$l1ou.options$root.model,normalize.tree.height=T ,
                         check.order=F, check.ultrametric=F)
-covInverseSqrt  <- t(RE$sqrtInvSigma)
 
-for (i in 1:len) {
-    contrast_table1[i,]  = covInverseSqrt%*%(Y_table[i,] - eModel$mu)
+Dtf  = t(REf$sqrtInvSigma)
+contrast_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
+for (i in 1:nrow(Y_table)) {
+  contrast_table[i,]=Dtf%*%(Y_table[i,] - eModel$mu)
 }
-save(contrast_table1, file="allknown_contrast.RData")
+save(contrast_table, file="contrast_table_2_27.RData")
 ```
 
 
