@@ -1,0 +1,286 @@
+---
+title: "Estimate contrast with known alpha"
+author: "Qing (Sabrina) Yu"
+date: "Feb 22,2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Goal of the study
+
+In this report, our goal is to check the distribution of phylogenetic contrasts
+with known alpha, known shift configuration and unknown shift values that are used in the bootstrap procedure 
+in the `l1ou` package. In the last report, we used the true shift edge, true shift values, true alpha.
+
+We used code from the bootstrap procedure to simulate contrast values.
+Then we calculated the mean and standard deviation of the contrast values at each node.
+The conclusions above held for all nodes, whether nodes had a shift on a child edge or not. 
+
+
+#  Estimate shift configuration from orignal lizard data (change)
+
+We used the lizard tree from the `phylolm` package and associated trait data on these lizard
+species (just the first trait, which is the first PC axis from a PCA).
+
+
+```{r,include=FALSE}
+library(l1ou)
+library(phylolm)
+data(lizard.tree, lizard.traits)
+lizard <- adjust_data(lizard.tree, lizard.traits[,1])
+n_tips=length(lizard$tree$tip.label) # Total number of tips
+eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
+save(eModel,  file = "eModel_2_27.RData")
+```
+
+This trait was analyzed to estimate the shifts in trait evolution using the function
+`fit_OU` from the `l1ou` package. 
+
+```{r}
+load("eModel_2_27.RData")
+data(lizard.tree, lizard.traits)
+lizard <- adjust_data(lizard.tree, lizard.traits[,1])
+truealpha=eModel$alpha
+y0=eModel$intercept
+truetheta = y0 + l1ou:::convert_shifts2regions(eModel$tree, 
+                                eModel$shift.configuration, eModel$shift.values)
+nShifts   = length(eModel$shift.configuration) # Total number of shifts
+n_tips=length(eModel$tree$tip.label) # Total number of tips
+sigma2=eModel$sigma2
+shiftnode= eModel$tree$edge[eModel$shift.configuration,1]-n_tips # internal nodes with shift
+othernode=(1:(n_tips-1))[-shiftnode] # Other nodes: those without a true shift
+```
+
+
+We used this model to simulate new data using the `rTraitCont` function from the `phylolm` package.
+Below, `RE` is the result of the function `sqrt_OU_covariance`, which calculates the square-root of the 
+phylogenetic covariance matrix with a recursive algorithm, which traverses the tree once.
+`covInverseSqrt` is the inverse square root of the phylogenetic covariance matrix, and `covSqrt` is the square-root of the phylogenetic covariance matrix. 
+Finally, `contrast` contains the contrasts at all nodes. 
+These matrices and contrasts were obtained using the true value of $\alpha$,
+the same value used to simulate the data. This is an ideal situation when
+$\alpha$ is known without error.
+
+# simulation procedure
+
+we use the same data for all scenarios:
+set.seed here, then save data in ytable.
+```{r,eval=F}
+n_sim=100000
+Y_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
+set.seed(1293)
+for (i in 1:n_sim) {
+  Y  <- rTraitCont(eModel$tree, "OU", theta=truetheta, 
+                 alpha=truealpha, 
+                 sigma=sqrt(eModel$sigma2), root.value=y0)
+  Y_table[i,]=Y
+}
+save(Y_table, file="Y_table_2_27.RData")
+```
+
+```{r}
+load("Y_table_2_27.RData")
+len=dim(Y_table)[1]
+```
+# Estimation Procedure
+
+We consider 4 scenarios for the calculation of contrasts, depending
+on what parameters are known (yes) or unknown (no) for the calculation
+of the inverse square-root of the covariance matrix.
+
+parameter |  1  |  2 (knownalpha)  |  3 () |  4 ()
+----------|-----|-----|-----|-----
+Î²<sub>0</sub>, Î²<sub>1</sub>, ...| yes | no | no | no
+Î± | yes | yes | no | no
+shift config | yes | yes | yes | no
+
+For the tree topology, we assume it known always.
+Refer to "filename" for the results of simulation 1, in which we know everything,
+and the contrasts behave as expected.
+
+# scenario 1: all parameters known and set to their true values
+
+use Y table, call contrasts table "contrast_table1"
+```{r,eval=F}
+REf = sqrt_OU_covariance(lizard.tree, alpha=truealpha, 
+                        root.model =  eModel$l1ou.options$root.model,normalize.tree.height=T ,
+                        check.order=F, check.ultrametric=F)
+
+Dtf  = t(REf$sqrtInvSigma)
+contrast_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
+for (i in 1:nrow(Y_table)) {
+  contrast_table[i,]=Dtf%*%(Y_table[i,] - eModel$mu)
+}
+save(contrast_table, file="contrast_table_2_27.RData")
+```
+
+
+
+# scenario 2: known alpha and known shift configuration, beta unknown around 3 hrs
+
+```{r,eval=F,include=T}
+RE = sqrt_OU_covariance(lizard$tree, alpha=eModel$alpha, # assumed known here
+                        root.model = "OUfixedRoot",
+                        check.order=F, check.ultrametric=F)
+covInverseSqrt  <- t(RE$sqrtInvSigma)
+
+contrast_table2=matrix(nrow=len, ncol=n_tips, data=NA)
+sigma_table2=rep(NA,len)
+mu_table2=matrix(nrow=len, ncol=n_tips, data=NA)
+shift_values2=matrix(nrow=len, ncol=length(shift_config), data=NA)
+for (i in 1:len) {
+  model= fit_OU(lizard$tree, Y_table[i,], shift_config,
+                alpha.upper=truealpha, alpha.lower=truealpha, alpha.starting.value=truealpha)
+  # the line above is to fix alpha to the known value
+ sigma_table2[i] = model$sigma2
+ shift_values2[i,]=model$shift.values
+ mu_table2[i,]=model$mu
+  contrast_table2[i,]  <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
+}
+save(sigma_table2,file="knownalpha_sigma2.RData")
+ save(contrast_table2,file="knownalpha_contrast.RData")
+ save(mu_table2,file="knownalpha_mu.RData")
+ save(shift_values2,file="knownalpha_shiftvalues.RData")
+```
+
+# scenario 3: known shiftconfig but unknown alpha and unknown beta
+
+```{r,eval=F,include=T}
+contrast_table3 = matrix(nrow=len, ncol=n_tips, data=NA)
+alpha_table3  = rep(NA,len)
+sigma_table3 = rep(NA,len)
+mu_table3 = matrix(nrow=len, ncol=n_tips, data=NA)
+shift_values3 = matrix(nrow=len, ncol=length(shift_config), data=NA)
+# also save sigma2 estimated values, and 8 shift values? and/or 100 mu values?
+for (i in 1:len) {
+  model= fit_OU(lizard$tree, Y_table[i,], shift_config)
+  alpha_table3[i] = model$alpha
+  sigma_table3[i] = model$sigma2
+  shift_values3[i,]=model$shift.values
+  mu_table3[i,]=model$mu
+  RE = sqrt_OU_covariance(lizard$tree, alpha=model$alpha, # alpha estimated here
+                          root.model = "OUfixedRoot",
+                          check.order=F, check.ultrametric=F)
+  covInverseSqrt  <- t(RE$sqrtInvSigma)
+  contrast_table3[i,] <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
+}
+save(contrast_table3,file="unknownalpha_contrast.RData")
+save(alpha_table3, file="unknownalpha_alpha.RData")
+save(sigma_table3,file="unknownalpha_sigma2.RData")
+save(mu_table3,file="unknownalpha_mu.RData")
+save(shift_values3,file="unknownalpha_shiftvalues.RData")
+```
+
+# scenario 4: unknown shift configuration, unknown alpha and unknown beta
+
+```{r,eval=F,include=T}
+n_sim=2000 # lower because estimation is a lot slower when we have to search for the config
+# use first n_sim rows of Ytable only
+Y_table=Y_table[1:n_sim,]
+contrast_table4=matrix(nrow=n_sim, ncol=n_tips, data=NA)
+vectorOfShift <- vector(mode = "list", length = n_sim)
+alpha_table4  = rep(NA,n_sim)
+sigma_table4 = rep(NA,n_sim)
+mu_table4 = matrix(nrow=n_sim, ncol=n_tips, data=NA)
+shift_values4 = vector(mode = "list", length = n_sim)
+
+for (i in 1:n_sim) {
+  model= estimate_shift_configuration(lizard$tree, Y_table[i,])
+  vectorOfShift[[i]] =model$shift.configuration
+  alpha_table4[i] = model$alpha
+  sigma_table4[i] = model$sigma2
+  shift_values4[[i]]=model$shift.values
+  mu_table4[i,]=model$mu
+  RE = sqrt_OU_covariance(lizard$tree ,alpha=model$alpha,
+                          root.model = "OUfixedRoot",
+                          check.order=FALSE, check.ultrametric=FALSE)
+  covInverseSqrt  <- t(RE$sqrtInvSigma)
+  contrast_table4[i,] <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
+}
+save(contrast_table4,file="unknownconfig_contrast.RData")
+save(alpha_table4, file="unknownconfig_alpha.RData")
+save(sigma_table4,file="unknownconfig_sigma2.RData")
+save(mu_table4,file="unknownconfig_mu.RData")
+save(shift_values4,file="unknownconfig_shiftvalues.RData")
+save(vectorOfShift,file="unknownconfig_shifts.RData")
+```
+
+# Results: visualizations of contrast distributions
+
+Function to calculate the variance of contrasts assuming mean 0.
+```{r}
+ss=function(x){
+  sum(x^2)/length(x)
+}
+```
+###all parameters known and set to their true values
+```{r}
+ load("~/R/traitevoOUshift/contrast_cases/allknown_contrast.RData")
+head(colMeans(contrast_table1)) 
+max(abs(colMeans(contrast_table1)))
+round(colMeans(contrast_table1),5)
+convar=apply(contrast_table1,2,ss)
+round(convar,3)
+mean(convar)
+sigma2
+```
+Mean of contrasts are close to zero but the variance of contrasts is not equal to `sigma2`.
+###known alpha and known shift configuration, beta unknown
+```{r}
+load("~/R/traitevoOUshift/contrast_cases/knownalpha_contrast.RData")
+load("~/R/traitevoOUshift/contrast_cases/knownalpha_sigma2.RData")
+load("~/R/traitevoOUshift/contrast_cases/knownalpha_shiftvalues.RData")
+load("~/R/traitevoOUshift/contrast_cases/knownalpha_mu.RData")
+head(colMeans(contrast_table2)) 
+max(abs(colMeans(contrast_table2)))
+round(colMeans(contrast_table2),5)
+convar=apply(contrast_table2,2,ss)
+hist(convar)
+round(convar,3)
+mean(convar)
+sigma2
+#Check which contrasts are extremely different from 0
+```
+###known shiftconfig but unknown alpha and unknown beta
+```{r}
+load("~/R/traitevoOUshift/contrast_cases/unknownalpha_contrast.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownalpha_sigma2.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownalpha_shiftvalues.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownalpha_mu.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownalpha_alpha.RData")
+head(colMeans(contrast_table3)) 
+max(abs(colMeans(contrast_table3)))
+round(colMeans(contrast_table3),5)
+convar=apply(contrast_table3,2,ss)
+round(convar,3)
+mean(convar)
+sigma2
+#Check which contrasts are extremely different from 0
+```
+###unknown shift configuration, unknown alpha and unknown beta spent 24hrs, generated 1262 eModels
+```{r}
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_alpha.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_shifts.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_sigma2.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_mu.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_shiftvalues.RData")
+load("~/R/traitevoOUshift/contrast_cases/unknownconfig_contrast.RData")
+#mean of contrasts are extremely different from zero
+head(colMeans(contrast_table4)) 
+max(abs(colMeans(contrast_table4)))
+colMeans(contrast_table4)
+convar=apply(contrast_table4,2,ss)
+convar
+mean(convar)
+head(vectorOfShift)
+#Shifts that occur the most often
+vectorOfShift=unlist(vectorOfShift, recursive = TRUE, use.names = F)
+as.data.frame(table(vectorOfShift))
+
+```
+The shifts being detected most often are: 32,77,118,164,98,14,55,74 which are exactly corresponding to the shift configuration `r shift_config`of the true model. 
