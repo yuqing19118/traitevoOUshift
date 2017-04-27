@@ -1,12 +1,11 @@
 ---
 title: "Estimate contrast with known alpha"
-author: "Qing (Sabrina) Yu"
+author: "Cecile Ane and Qing (Sabrina) Yu"
 date: "Feb 22,2017"
 output:
   pdf_document: default
-  html_document: default
+  toc: yes
 ---
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -22,43 +21,57 @@ Then we calculated the mean and standard deviation of the contrast values at eac
 The conclusions above held for all nodes, whether nodes had a shift on a child edge or not. 
 
 
-#  Estimate shift configuration from orignal lizard data (change)
+#  Estimate shift configuration from original lizard data (change)
 
 We used the lizard tree from the `phylolm` package and associated trait data on these lizard
 species (just the first trait, which is the first PC axis from a PCA).
+To simulate data according to a model that is biologically plausible,
+we estimated the shift configuration, shift values and covariance parameters
+from original lizard data.
 
-
-```{r,include=FALSE}
-library(l1ou)
-library(phylolm)
-data(lizard.tree, lizard.traits)
-lizard <- adjust_data(lizard.tree, lizard.traits[,1])
-n_tips=length(lizard$tree$tip.label) # Total number of tips
+```{r,include=FALSE,eval=FALSE}
 eModel <- estimate_shift_configuration(lizard$tree, lizard$Y)
 save(eModel,  file = "eModel_2_27.RData")
 ```
 
 This trait was analyzed to estimate the shifts in trait evolution using the function
 `fit_OU` from the `l1ou` package. 
+```{r,i, include=FALSE}
+library(l1ou)
+library(phylolm)
+```
 
 ```{r}
-load("eModel_2_27.RData")
-data(lizard.tree, lizard.traits)
-lizard <- adjust_data(lizard.tree, lizard.traits[,1])
-truealpha=eModel$alpha
-y0=eModel$intercept
-truetheta = y0 + l1ou:::convert_shifts2regions(eModel$tree, 
-                                eModel$shift.configuration, eModel$shift.values)
-nShifts   = length(eModel$shift.configuration) # Total number of shifts
-n_tips=length(eModel$tree$tip.label) # Total number of tips
-sigma2=eModel$sigma2
-shiftnode= eModel$tree$edge[eModel$shift.configuration,1]-n_tips # internal nodes with shift
-othernode=(1:(n_tips-1))[-shiftnode] # Other nodes: those without a true shift
+sessionInfo()$otherPkgs$l1ou$Version  #version 1.29
 ```
 
 
-We used this model to simulate new data using the `rTraitCont` function from the `phylolm` package.
-Below, `RE` is the result of the function `sqrt_OU_covariance`, which calculates the square-root of the 
+```{r}
+
+load("eModel_2_27.RData") # eModel.tree same as lizard.tree
+data(lizard.tree, lizard.traits)
+lizard <- adjust_data(lizard.tree, lizard.traits[,1])
+n_tips=length(lizard$tree$tip.label)  # 100: total number of tips
+truealpha=eModel$alpha  # 0.606897967627925
+y0=eModel$intercept
+truetheta = y0 + l1ou:::convert_shifts2regions(eModel$tree, 
+                                eModel$shift.configuration, eModel$shift.values)
+table(truetheta)
+# -5.25186223573345 -4.56654712450638 -4.04766913950491 -3.45016309674712 -3.23947780027265 -2.72293353502748 
+#                1                 3                 1                 1                 1                 7 
+#-2.36362306302032  -1.6605679645554 0.248809571469948 
+#                1                25               158 
+nShifts   = length(eModel$shift.configuration) # c(55,98,118,74,14,77,32,164)
+
+sigma2=eModel$sigma2   # 0.0625186613743141
+shift_config=eModel$shift.configuration
+shiftnode=eModel$tree$edge[shift_config,1]# internal nodes with shift
+
+```
+
+
+Below, we use this model to simulate new data using the `rTraitCont` function from the `phylolm` package.
+`RE` is the result of the function `sqrt_OU_covariance`, which calculates the square-root of the 
 phylogenetic covariance matrix with a recursive algorithm, which traverses the tree once.
 `covInverseSqrt` is the inverse square root of the phylogenetic covariance matrix, and `covSqrt` is the square-root of the phylogenetic covariance matrix. 
 Finally, `contrast` contains the contrasts at all nodes. 
@@ -67,9 +80,10 @@ the same value used to simulate the data. This is an ideal situation when
 $\alpha$ is known without error.
 
 # simulation procedure
+We use the same data for all scenarios:
+`set.seed` is used here to make it possible to re-simulate the exact same data,
+then these data are saved in a file (`Y_table`).
 
-we use the same data for all scenarios:
-set.seed here, then save data in ytable.
 ```{r,eval=F}
 n_sim=100000
 Y_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
@@ -80,52 +94,95 @@ for (i in 1:n_sim) {
                  sigma=sqrt(eModel$sigma2), root.value=y0)
   Y_table[i,]=Y
 }
+colnames(Y_table)=eModel$tree$tip.label
 save(Y_table, file="Y_table_2_27.RData")
 ```
 
 ```{r}
 load("Y_table_2_27.RData")
 len=dim(Y_table)[1]
+n_sim=100000
 ```
-# Estimation Procedure
+
+Just to check our simulated values, we define
+our own function "ss" to calculate the variance of assuming a known population mean of 0.
+The name "ss" stands for "sum of squares", although this sum of squares is rescaled by the sample size.
+	
+```{r}
+ss=function(x){
+	  sum(x^2)/length(x)
+	}
+```
+	
+Now to check the mean and variance of the simulated Y values:
+
+```{r, eval=F}
+round(colMeans(Y_table-rep(eModel$mu[,1],each=n_sim),5)) # all 0: good
+convar = apply(Y_table-rep(eModel$mu[,1],each=n_sim), 2, ss)
+round(convar,3) # all about the same
+mean(convar) # 0.03622244: same as expected variance below: good
+sigma2/(2*truealpha) * (1-exp(-2*truealpha*1)) # 0.03620576
+```
+
+
+# Contrast calculation procedure
 
 We consider 4 scenarios for the calculation of contrasts, depending
 on what parameters are known (yes) or unknown (no) for the calculation
 of the inverse square-root of the covariance matrix.
 
-parameter |  1  |  2 (knownalpha)  |  3 () |  4 ()
+parameter | 1: full model known | 2: alpha known | 3: shift config known | 4: tree known
 ----------|-----|-----|-----|-----
-Î²<sub>0</sub>, Î²<sub>1</sub>, ...| yes | no | no | no
-Î± | yes | yes | no | no
+$\beta$<sub>0</sub>, $\beta$<sub>1</sub>, ...| yes | no | no | no
+$\alpha$ | yes | yes | no | no
 shift config | yes | yes | yes | no
-
 For the tree topology, we assume it known always.
 Refer to "filename" for the results of simulation 1, in which we know everything,
 and the contrasts behave as expected.
 
-# scenario 1: all parameters known and set to their true values
+## scenario 1: all parameters known and set to their true values
 
 use Y table, call contrasts table "contrast_table1"
 ```{r,eval=F}
 REf = sqrt_OU_covariance(lizard.tree, alpha=truealpha, 
-                        root.model =  eModel$l1ou.options$root.model,normalize.tree.height=T ,
-                        check.order=F, check.ultrametric=F)
+                        root.model = "OUfixedRoot", # eModel$l1ou.options$root.model,
+                        check.order=F, check.ultrametric=F) # needed in l1ou v1.29
 
-Dtf  = t(REf$sqrtInvSigma)
+covInverseSqrt  = t(REf$sqrtInvSigma)
+```
+
+To check the correctness of this square-root covariance matrix calculation:
+```{r, eval=F}
+treeheight = branching.times(eModel$tree)[1] # 1.00000000002
+Vbm = vcv(eModel$tree) # t_ij values. Tree height is 1 here, do d_ij = 2*(1-t_ij)
+Vou = (1-exp(-2*truealpha*Vbm)) * exp(-truealpha*2*(treeheight-Vbm)) / (2*truealpha)
+tmp = covInverseSqrt %*%  Vou %*% t(covInverseSqrt)
+diag(tmp) # if normalize.tree.height=T was ommitted above, and l1ou v1.29:
+# all 1.742289: ratio found later in convar/sigma2
+all.equal(tmp, diag(n_tips), scale=1) # TRUE
+
+```
+
+Now that we can trust the inverse square-root of the covariance matrix,
+158	we use it to calculate contrasts:
+```{r,eval=F}
 contrast_table=matrix(nrow=n_sim, ncol=n_tips, data=NA)
-for (i in 1:nrow(Y_table)) {
-  contrast_table[i,]=Dtf%*%(Y_table[i,] - eModel$mu)
+for (i in 1:len) {
+  contrast_table[i,]=covInverseSqrt%*%(Y_table[i,] - eModel$mu)
 }
 save(contrast_table, file="contrast_table_2_27.RData")
 ```
 
 
 
-# scenario 2: known alpha and known shift configuration, beta unknown around 3 hrs
+## scenario 2: beta unknown
+
+Here, we assume that we know alpha, we know the shift configuration, but beta is unknown.
+171	It took around 3 hours.
 
 ```{r,eval=F,include=T}
-RE = sqrt_OU_covariance(lizard$tree, alpha=eModel$alpha, # assumed known here
-                        root.model = "OUfixedRoot",
+RE = sqrt_OU_covariance(lizard$tree, alpha=truealpha, # assumed known here
+                        root.model =  eModel$l1ou.options$root.model,
                         check.order=F, check.ultrametric=F)
 covInverseSqrt  <- t(RE$sqrtInvSigma)
 
@@ -148,8 +205,11 @@ save(sigma_table2,file="knownalpha_sigma2.RData")
  save(shift_values2,file="knownalpha_shiftvalues.RData")
 ```
 
-# scenario 3: known shiftconfig but unknown alpha and unknown beta
+## scenario 3: alpha and beta unknown
 
+Here we assume that the shift configuration is known, but not alpha and not beta.
+The correlation matrix among tips is unknown, then, so its inverse square-root
+needs to be re-calculated (based on the estimated alpha) for each simulated vector.
 ```{r,eval=F,include=T}
 contrast_table3 = matrix(nrow=len, ncol=n_tips, data=NA)
 alpha_table3  = rep(NA,len)
@@ -164,7 +224,7 @@ for (i in 1:len) {
   shift_values3[i,]=model$shift.values
   mu_table3[i,]=model$mu
   RE = sqrt_OU_covariance(lizard$tree, alpha=model$alpha, # alpha estimated here
-                          root.model = "OUfixedRoot",
+                           root.model =  eModel$l1ou.options$root.model,
                           check.order=F, check.ultrametric=F)
   covInverseSqrt  <- t(RE$sqrtInvSigma)
   contrast_table3[i,] <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
@@ -176,10 +236,17 @@ save(mu_table3,file="unknownalpha_mu.RData")
 save(shift_values3,file="unknownalpha_shiftvalues.RData")
 ```
 
-# scenario 4: unknown shift configuration, unknown alpha and unknown beta
+## scenario 4.1: unknown shift configuration
+
+Also: unknown alpha and unknown beta.
+The estimation of the shift configuration takes a long time, so the
+number of simulations had to be reduced.
+In a preliminary run, the contrasts for 1262 simulations were calculated in 24 hours.
+So for the final run, we plan to complete a total of 2000 simulations ("n_sim" below).
+criterion: pBIC, which is the default of function `estimate_shift_configuration`. 
 
 ```{r,eval=F,include=T}
-n_sim=2000 # lower because estimation is a lot slower when we have to search for the config
+n_sim=800 # lower because estimation is a lot slower when we have to search for the config
 # use first n_sim rows of Ytable only
 Y_table=Y_table[1:n_sim,]
 contrast_table4=matrix(nrow=n_sim, ncol=n_tips, data=NA)
@@ -202,85 +269,481 @@ for (i in 1:n_sim) {
   covInverseSqrt  <- t(RE$sqrtInvSigma)
   contrast_table4[i,] <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
 }
-save(contrast_table4,file="unknownconfig_contrast.RData")
-save(alpha_table4, file="unknownconfig_alpha.RData")
-save(sigma_table4,file="unknownconfig_sigma2.RData")
-save(mu_table4,file="unknownconfig_mu.RData")
-save(shift_values4,file="unknownconfig_shiftvalues.RData")
-save(vectorOfShift,file="unknownconfig_shifts.RData")
+save(contrast_table4,file="unknownconfig_contrast_4.1.RData")
+save(alpha_table4, file="unknownconfig_alpha_4.1.RData")
+save(sigma_table4,file="unknownconfig_sigma2_4.1.RData")
+save(mu_table4,file="unknownconfig_mu_4.1.RData")
+save(shift_values4,file="unknownconfig_shiftvalues_4.1.RData")
+save(vectorOfShift,file="unknownconfig_shifts_4.1.RData")
 ```
+
+## scenario 4.2: unknown shift configuration, unknown alpha and unknown beta
+
+criterion: AICc
+
+```{r,eval=F,include=T}
+n_sim=800 # lower because estimation is a lot slower when we have to search for the config
+# use first n_sim rows of Ytable only
+Y_table=Y_table[1:n_sim,]
+contrast_table5=matrix(nrow=n_sim, ncol=n_tips, data=NA)
+vectorOfShift2 <- vector(mode = "list", length = n_sim)
+alpha_table5  = rep(NA,n_sim)
+sigma_table5 = rep(NA,n_sim)
+mu_table5 = matrix(nrow=n_sim, ncol=n_tips, data=NA)
+shift_values5 = vector(mode = "list", length = n_sim)
+
+for (i in 1:n_sim) {
+  model= estimate_shift_configuration(lizard$tree, Y_table[i,],criterion="AICc" )
+  vectorOfShift2[[i]] =model$shift.configuration
+  alpha_table5[i] = model$alpha
+  sigma_table5[i] = model$sigma2
+  shift_values5[[i]]=model$shift.values
+  mu_table5[i,]=model$mu
+  RE = sqrt_OU_covariance(lizard$tree ,alpha=model$alpha,
+                          root.model = "OUfixedRoot",
+                          check.order=FALSE, check.ultrametric=FALSE)
+  covInverseSqrt  <- t(RE$sqrtInvSigma)
+  contrast_table5[i,] <-  covInverseSqrt%*%(Y_table[i,] - model$mu)
+}
+save(contrast_table5,file="unknownconfig_contrast_4.2.RData")
+save(alpha_table5, file="unknownconfig_alpha_4.2.RData")
+save(sigma_table5,file="unknownconfig_sigma2_4.2.RData")
+save(mu_table5,file="unknownconfig_mu_4.2.RData")
+save(shift_values5,file="unknownconfig_shiftvalues_4.2.RData")
+save(vectorOfShift2,file="unknownconfig_shifts_4.2.RData")
+```
+
+
 
 # Results: visualizations of contrast distributions
 
-Function to calculate the variance of contrasts assuming mean 0.
 ```{r}
-ss=function(x){
-  sum(x^2)/length(x)
-}
+#nodes that corresponding to small variance contrasts
+intnode=lizard.tree$edge[,1]
+all.equal(intnode, rep(199:101, each=2))
+intnode=unique(intnode) ##remove repetitive numbers
 ```
-###all parameters known and set to their true values
+The sequence of internal node is from 199:101, which corresponding to contrasts from 1: 99. The 100th contrast is the contrast of the root node.
+Here is a simple proof:
+Now to check the mean and variance of the simulated Y values:
 ```{r}
- load("~/R/traitevoOUshift/contrast_cases/allknown_contrast.RData")
+# Now, we want to know which contrast does node 197 corresponding to. After we add 5 to all traits values in one sister branch and substract 5 from # all trait values in the other sister`s branch. The contrast of node 197 will change the most. Others may have slight changes or remain the same,
+truealpha=eModel$alpha
+REf = sqrt_OU_covariance(lizard.tree, alpha=truealpha, 
+                        root.model =  eModel$l1ou.options$root.model,
+                        check.order=F, check.ultrametric=F)
+
+Dtf  = t(REf$sqrtInvSigma)
+contrast_original=Dtf%*%(eModel$Y - eModel$mu)
+eModel$Y[99]=eModel$Y[99]+5
+eModel$Y[98]=eModel$Y[98]-5
+eModel$Y[97]=eModel$Y[97]-5
+eModel$Y[96]=eModel$Y[96]-5
+contrast_change=Dtf%*%(eModel$Y - eModel$mu)
+options(scipen=999)
+cbind(contrast_original,contrast_change)
+ 
+```
+
+Here, we can see the third contrast changes the most significantly, so the node 197 corresponding to contrast 3. 
+
+### Results from Scenario 1: all parameters known and set to their true values
+```{r}
+load("allknown_contrast.RData")
 head(colMeans(contrast_table1)) 
-max(abs(colMeans(contrast_table1)))
+max(abs(colMeans(contrast_table1)))# 0.0018224
 round(colMeans(contrast_table1),5)
 convar=apply(contrast_table1,2,ss)
 round(convar,3)
-mean(convar)
+mean(convar)# 0.06249321
+sigma2# 0.06251866
+0.1089751/0.06251866 # 1.743081. l1ou v1.29 without normalize.tree.height: mean(convar) was 0.1089751
+```
+Mean of contrasts are close to zero and the variance of contrasts is close to `sigma2`.
+
+
+### Results from Scenario 2: ## scenario 2: beta unknown
+
+but known alpha and known shift configuration
+```{r myplot,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+load("knownalpha_contrast.RData")
+load("knownalpha_sigma2.RData")
+load("knownalpha_shiftvalues.RData")
+load("knownalpha_mu.RData")
+# contrasts mean
+contrast_mean2=colMeans(contrast_table2)
+head(contrast_mean2) 
+max(abs(contrast_mean2))
+hist(contrast_mean2)
+# contrasts variance
+convar2=apply(contrast_table2,2,ss)
+contrast2=colMeans(contrast_table2)
+
+#Try to find the contrast with variance relatively small, median and large. 
+ind_small2=which(convar2<0.04)
+ind_median2=which(convar2<0.06&convar2>0.04)
+median_node2=intnode[ind_median2]
+small_node2=intnode[ind_small2]
+hist(convar2,main="variance of contrasts in Scenario 2",xlab="contrast variance",ylab="")
+plot(eModel$tree,show.tip.label = F,main="",font=8)
+nodelabels(round(convar2[ind_small2],3),small_node2,col="blue",frame = "none",cex=0.6)
+edgelabels(edge=shift_config,col="green",frame = "none",pch=17)
+nodelabels(round(convar2[ind_median2],3),median_node2,col="purple",frame = "none",cex=0.6)
+mtext(
+
+"blue: contrast variance < 0.04, purple:
+      contrast variance > 0.04 and < 0.06,
+      green dots: shifts",
+      line=-21,side=3,las=0,cex=1)
+plot(convar2~dist2shift, xaxt="n",xlab="distance to shift", ylab="contrast variance")
+axis(1, at=0:4, labels=as.character(c(0:3,Inf)))
+round(convar2,3)
+mean(convar2)
+mean(convar2[-ind_small2])
 sigma2
 ```
-Mean of contrasts are close to zero but the variance of contrasts is not equal to `sigma2`.
-###known alpha and known shift configuration, beta unknown
+Some contrasts with extremely small variance draw our attention. When we make a plot, we can see those contrasts with small variances appear where the shift exists. Those shifts make the variances of contrasts underestimated. And the plot below can clearly show as nodes become further away from shifts, their variances of contrast increase. The nodes closer to the root have higher variance of contrasts. And it is clear that the last contrast has variance equal to 0 since we have a fixed root.  
 ```{r}
-load("~/R/traitevoOUshift/contrast_cases/knownalpha_contrast.RData")
-load("~/R/traitevoOUshift/contrast_cases/knownalpha_sigma2.RData")
-load("~/R/traitevoOUshift/contrast_cases/knownalpha_shiftvalues.RData")
-load("~/R/traitevoOUshift/contrast_cases/knownalpha_mu.RData")
-head(colMeans(contrast_table2)) 
-max(abs(colMeans(contrast_table2)))
-round(colMeans(contrast_table2),5)
-convar=apply(contrast_table2,2,ss)
-hist(convar)
-round(convar,3)
-mean(convar)
-sigma2
-#Check which contrasts are extremely different from 0
+###making plots for contrasts
+dist2shift=rep(Inf,199)
+dist2shift[shiftnode]=0
+shiftparent=shiftnode
+for(k in 1:10){
+  old=c()
+  for(node in shiftparent){
+    ind=which(node==eModel$tree$edge[,2])
+    old=c(old,ind)
+  }
+  shiftparent=eModel$tree$edge[old,1]
+  for(node in shiftparent){
+    if(dist2shift[node]>k) dist2shift[node]=k
+  }
+}
+
+dist2shift=dist2shift[-c(1:99)]
+dist2shift=rev(dist2shift)
+dist2shift[100]=0 ##The last contrast is the root edge
+dist2shift[dist2shift==Inf] = 4
+plot(convar2~dist2shift, xaxt="n",xlab="distance to shift", ylab="contrast variance")
+axis(1, at=0:4, labels=as.character(c(0:3,Inf)))
 ```
-###known shiftconfig but unknown alpha and unknown beta
+
+###Results from Scenario 3:  alpha and beta unknown
+but known shift configuration
 ```{r}
-load("~/R/traitevoOUshift/contrast_cases/unknownalpha_contrast.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownalpha_sigma2.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownalpha_shiftvalues.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownalpha_mu.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownalpha_alpha.RData")
-head(colMeans(contrast_table3)) 
-max(abs(colMeans(contrast_table3)))
-round(colMeans(contrast_table3),5)
-convar=apply(contrast_table3,2,ss)
-round(convar,3)
-mean(convar)
+load("unknownalpha_contrast.RData")
+load("unknownalpha_sigma2.RData")
+load("unknownalpha_shiftvalues.RData")
+load("unknownalpha_mu.RData")
+load("unknownalpha_alpha.RData")
+# calculate contrasts mean
+contrast_mean3=colMeans(contrast_table3)
+head(contrast_mean3) 
+max(abs(contrast_mean3))
+hist(contrast_mean3)
+# Calculate contrasts variance
+convar3=apply(contrast_table3,2,ss)
+round(convar3,3)
+hist(convar3)
+###Exactly the same as last one
+intnode[convar3<0.06]
+mean(convar3)
 sigma2
-#Check which contrasts are extremely different from 0
+#Try to find the contrast with variance relatively small, median and large. 
+ind_small3=which(convar3<0.04)
+ind_median3=which(convar3<0.06&convar3>=0.04)
+ind_large3=which(convar3>=0.08)
+median_node3=intnode[ind_median3]
+small_node3=intnode[ind_small3]
+large_node3=intnode[ind_large3]
+large_node3
+mean(convar3[-c(ind_small3,ind_large3)])
 ```
-###unknown shift configuration, unknown alpha and unknown beta spent 24hrs, generated 1262 eModels
+
+```{r myplot2,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+plot(eModel$tree,show.tip.label = F,main="small,median,large contrast nodes",font=8)
+nodelabels(round(convar3[ind_small3],3),small_node3,col="blue",frame = "none")
+edgelabels(shift_config,shift_config,col="green",frame = "none")
+nodelabels(round(convar3[ind_median3],3),median_node3,col="purple",frame = "none")
+nodelabels(round(convar3[ind_large3],3),large_node3,col="red",frame = "none")
+```
+Since alpha is unknown, the variance of contrasts being estimated would be different with varied alpha values. So, I split contrast tables into two different sets of contrasts based on either alpha has been underestimated or overestimated. 
 ```{r}
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_alpha.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_shifts.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_sigma2.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_mu.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_shiftvalues.RData")
-load("~/R/traitevoOUshift/contrast_cases/unknownconfig_contrast.RData")
-#mean of contrasts are extremely different from zero
-head(colMeans(contrast_table4)) 
-max(abs(colMeans(contrast_table4)))
-colMeans(contrast_table4)
-convar=apply(contrast_table4,2,ss)
-convar
-mean(convar)
-head(vectorOfShift)
-#Shifts that occur the most often
-vectorOfShift=unlist(vectorOfShift, recursive = TRUE, use.names = F)
-as.data.frame(table(vectorOfShift))
+#explore alpha
+n_sim=100000
+mean(alpha_table3)
+hist(alpha_table3,xlim=c(0,5))
+alpha_underest=rep(2,n_sim)
+alpha_underest[alpha_table3<eModel$alpha]=1
+contrast_underest=subset(contrast_table3,alpha_underest==1)
+contrast_overest=subset(contrast_table3,alpha_underest==2)
+contrast_underest_var=apply(contrast_underest,2,var)
+contrast_overest_var=apply(contrast_overest,2,var)
+hist(contrast_underest_var)
+hist(contrast_overest_var)
+#Try to find the contrast with variance relatively small and large with underestimated alpha
+ind_small_under=which(contrast_underest_var<0.04)
+ind_median_under=which(contrast_underest_var<0.06&contrast_underest_var>=0.04)
+ind_large_under=which(contrast_underest_var>=0.08)
+median_node3_under=intnode[ind_median_under]
+small_node3_under=intnode[ind_small_under]
+large_node3_under=intnode[ind_large_under]
+large_node3_under
+```
+
+Try to find the contrast`s variance with underestimated alpha
+``````{r myplot3,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+par(oma=c(0,0,1.5,0))
+plot(eModel$tree,show.tip.label = F  ,font=8,no.margin=T)
+mtext(expression(paste(hat(a),"<", a)), outer=TRUE)
+nodelabels(round(contrast_underest_var[ind_small_under],3),small_node3_under,col="blue",frame = "none",cex=0.6)
+edgelabels(edge=shift_config,col="green",frame = "none",pch=17)
+nodelabels(round(contrast_underest_var[ind_median_under],3),median_node3_under,col="purple",frame = "none",cex=0.6)
+#nodelabels(round(contrast_underest_var[ind_large_under],3),large_node3_under,col="red",frame = "none")
 
 ```
-The shifts being detected most often are: 32,77,118,164,98,14,55,74 which are exactly corresponding to the shift configuration `r shift_config`of the true model. 
+Many contrasts with at least one child node as tip of the tree are underestimated. As mentioned above, contrasts of nodes with a shift edge are underestimated. One of the node labled in red has relatively large variance of contrast. This situation cannot be fully explained by its location closer to the root. (need some investigations)  
+
+
+Try to find the contrast`s variance with overestimated alpha
+```{r}
+ind_small_over=which(contrast_overest_var<0.04)
+ind_median_over=which(contrast_overest_var<0.06&contrast_overest_var>=0.04)
+ind_large_over=which(contrast_overest_var>=0.08)
+median_node3_over=intnode[ind_median_over]
+small_node3_over=intnode[ind_small_over]
+large_node3_over=intnode[ind_large_over]
+large_node3_over
+```
+
+
+
+
+
+``````{r myplot4,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+par(oma=c(0,0,1.5,0))
+plot(eModel$tree,show.tip.label = F  ,font=8,no.margin=T,direction = "leftwards")
+mtext(expression(paste(hat(a),">", a)), outer=TRUE)
+nodelabels(round(contrast_overest_var[ind_small_over],3),small_node3_over,col="blue",frame = "none",cex=0.6)
+edgelabels(edge=shift_config,col="green",frame = "none",pch=17)
+nodelabels(round(contrast_overest_var[ind_median_over],3),median_node3_over,col="purple",frame = "none",cex=0.6)
+nodelabels(round(contrast_overest_var[ind_large_over],3),large_node3_over,col="red",frame = "none",cex=0.6)
+
+```
+When alpha has been overestimated, there are much more nodes with large variance of contrasts. And most of those nodes are closer to root. 
+
+
+### Results from unknown shift configuration
+	
+and also unknown alpha and unknown beta. Spent 24hrs, generated 1262 eModels
+```{r myplot5,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+load("unknownconfig_alpha_4.1.RData")
+load("unknownconfig_shifts_4.1.RData")
+load("unknownconfig_sigma2_4.1.RData")
+load("unknownconfig_mu_4.1.RData")
+load("unknownconfig_shiftvalues_4.1.RData")
+load("unknownconfig_contrast_4.1.RData")
+#Calculate mean of contrasts
+contrast_mean4=colMeans(contrast_table4)
+head(contrast_mean4) 
+max(abs(contrast_mean4))
+hist(contrast_mean4)
+#Calculate variance of contrasts
+convar4=apply(contrast_table4,2,ss)
+hist(convar4)
+
+#Shifts that occur the most often
+vectorOfShift_1=unlist(vectorOfShift, recursive = TRUE, use.names = F)
+freq_table=as.data.frame(table(vectorOfShift_1))
+freq_table
+```
+
+Try to find the contrast with variance relatively small, median and large. 
+
+```{r}
+ind_small4=which(convar4<0.04)
+ind_median4=which(convar4<0.06&convar4>=0.04)
+ind_large4=which(convar4>=0.085)
+median_node4=intnode[ind_median4]
+small_node4=intnode[ind_small4]
+large_node4=intnode[ind_large4]
+large_node4
+
+mean(convar4[-as.numeric(large_node4)])
+```
+Even though we ignore those nodes with large variance of contrasts, the variances of contrasts on average are still overestimated.  
+```{r myplot6,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+mean_large4=intnode[which(abs(contrast_mean4)>0.05)]
+median_node4=intnode[ind_median4]
+small_node4=intnode[ind_small4]
+large_node4=intnode[ind_large4]
+plot(eModel$tree,show.tip.label = F,main="",font=8)
+nodelabels(round(convar4[ind_small4],3),small_node4,col="blue",frame = "none")
+for(i in 1:length(shift_config)){
+edgelabels(paste(shift_config[i],"  ",round(freq_table$Freq[which(freq_table$vectorOfShift_1==shift_config[i])]/8,3),"%"),shift_config[i],col="green",frame = "none")
+}
+#56,73
+
+edgelabels(paste(round(freq_table$Freq[which(freq_table$vectorOfShift_1==56)]/8,3),"%"),56,col="green",frame="none")
+edgelabels(paste(round(freq_table$Freq[which(freq_table$vectorOfShift_1==73)]/8,3),"%"),73,col="green",frame = "none")
+nodelabels(round(convar4[ind_median4],3),median_node4,col="purple",frame = "none")
+nodelabels(round(convar4[ind_large4],3),large_node4,col="red",frame = "none",adj=c(0.5,0))
+nodelabels(round(contrast_mean4[which(abs(contrast_mean4)>0.05)],3),mean_large4,col="black",frame = "none",adj=c(0.5,1))
+mtext("blue: contrast variance < 0.04, purple: contrast variance > 0.04 and < 0.06,
+      green dots: shifts",line=-21,side=3,las=0)
+```
+The shifts being detected most often are: 32,77,118,164,98,14,55,74 which are exactly corresponding to the shift configuration `r eModel$shift.configuration`of the true model. 
+A few nodes with shift edges have larger than average mean of contrasts. So, their variances are overestimated accordingly. 
+
+Contrasts of node with shift edges being detected or not
+```{r}
+
+contrast_plot = function(edge, contrast){
+  contrast_detect=rep(NA, 600)
+  for(i in 1:length(vectorOfShift)){
+    if(edge%in%vectorOfShift[[i]]){
+      contrast_detect[i]=TRUE
+    } 
+    else {
+      contrast_detect[i]=FALSE
+    }
+  }
+  plot(contrast_table4[,contrast] ~ factor(contrast_detect), xlab="detected?",ylab=paste(contrast,"th contrast value"))
+  mtext(paste("edge: ",edge," contrast: ",contrast,
+              ", detected: ", round(100*sum(contrast_detect)/800, 1), "%", sep=""))
+  abline(h=0, lty=3)
+  convar_bygroup = tapply(contrast_table4[,contrast], contrast_detect, var)
+  mtext(side=1, at=1:2, text=round(convar_bygroup,4), line=-2)
+}
+```
+Those figures show below represent contrasts of different nodes 
+with group1(shift detected) and group2(shift not detected). 
+```{r}
+layout(matrix(1:4,2,2))
+contrast_plot(14,7) # edge 14, node 193, contrast 7
+contrast_plot(55,28)# edge 55, node 172, contrast 28
+contrast_plot(74,37) # edge 74, node 163, contrast 37
+contrast_plot(77,39) # edge 77, node 161, contrast 39
+
+contrast_plot(98,49) # edge 98, node 151, contrast 49
+contrast_plot(118,59)# edge 118, node 141, contrast 59
+contrast_plot(164,82)# edge 164, node 118, contrast 82
+contrast_plot(32,16)# last edge 32, node 184 , contrast 16
+
+```
+It is clear to see nodes with shift edges being detected have mean of contrasts close to zero. In some cases when those shift edges have not been detected have very different contrast values. Most of contrasts with shift edge not being detected have larger variances than variance of contrasts with shift edges being detected.  Edge 77 is especially strange because it does not follow last rule. (Need some explaination)
+
+
+
+
+
+```{r myplot7,echo=TRUE, fig.width=8, fig.height=12, dpi=300}
+load("unknownconfig_alpha_4.2.RData")
+load("unknownconfig_shifts_4.2.RData")
+load("unknownconfig_sigma2_4.2.RData")
+load("unknownconfig_mu_4.2.RData")
+load("unknownconfig_shiftvalues_4.2.RData")
+load("unknownconfig_contrast_4.2.RData")
+#Calculate mean of contrasts
+contrast_mean5=colMeans(contrast_table5)
+head(contrast_mean5) 
+max(abs(contrast_mean5))
+hist(contrast_mean5)
+#Calculate variance of contrasts
+convar5=apply(contrast_table5,2,ss)
+hist(convar5)
+
+#Shifts that occur the most often
+vectorOfShift_2=unlist(vectorOfShift2, recursive = TRUE, use.names = F)
+freq_table2=as.data.frame(table(vectorOfShift_2))
+freq_table2
+```
+
+Try to find the contrast with variance relatively small, median and large. 
+
+```{r}
+ind_small5=which(convar5<0.04)
+ind_median5=which(convar5<0.06&convar5>=0.04)
+ind_large5=which(convar5>=0.085)
+median_node5=intnode[ind_median5]
+small_node5=intnode[ind_small5]
+large_node5=as.numeric(intnode[ind_large5])
+large_node5
+
+mean(convar5[-large_node5])
+```
+Even though we ignore those nodes with large variance of contrasts, the variances of contrasts on average are still overestimated.  
+```{r}
+mean_large5=intnode[which(abs(contrast_mean5)>0.05)]
+median_node5=intnode[ind_median5]
+small_node5=intnode[ind_small5]
+large_node5=intnode[ind_large5]
+plot(eModel$tree,show.tip.label = F,main="small,median,large contrast nodes",font=8)
+nodelabels(round(convar5[ind_small5],3),small_node5,col="blue",frame = "none")
+for(i in 1:length(shift_config)){
+edgelabels(paste(shift_config[i],"  ",round(freq_table2$Freq[which(freq_table2$vectorOfShift_1==shift_config[i])]/6,3),"%"),shift_config[i],col="green",frame = "none")
+}
+```
+#56,73
+```{r myplot8, eval=FALSE, fig.height=12, fig.width=8, dpi=300, include=FALSE}
+edgelabels(paste(round(freq_table2$Freq[which(freq_table2$vectorOfShift_1==56)]/6,3),"%"),56,col="green",frame="none")
+edgelabels(paste(round(freq_table2$Freq[which(freq_table2$vectorOfShift_1==73)]/6,3),"%"),73,col="green",frame = "none")
+nodelabels(round(convar5[ind_median5],3),median_node5,col="pink",frame = "none")
+nodelabels(round(convar5[ind_large5],3),large_node5,col="red",frame = "none",adj=c(0.5,0))
+nodelabels(round(contrast_mean5[which(abs(contrast_mean5)>0.05)],3),mean_large5,col="black",frame = "none",adj=c(0.5,1))
+```
+The shifts being detected most often are: 32,77,118,164,98,14,55,74 which are exactly corresponding to the shift configuration `r eModel$shift.configuration`of the true model. 
+A few nodes with shift edges have larger than average mean of contrasts. So, their variances are overestimated accordingly. 
+
+Contrasts of node with shift edges being detected or not
+
+
+
+```{r,eval=FALSE}
+
+contrast_plot = function(edge, contrast){
+  contrast_detect=rep(NA, 600)
+  for(i in 1:length(vectorOfShift2)){
+    if(edge%in%vectorOfShift2[[i]]){
+      contrast_detect[i]=TRUE
+    } 
+    else {
+      contrast_detect[i]=FALSE
+    }
+  }
+  plot(contrast_table5[,contrast] ~ factor(contrast_detect), xlab="detected?",ylab=paste(contrast,"th contrast value"))
+  mtext(paste("edge: ",edge," contrast: ",contrast,
+              ", detected: ", round(100*sum(contrast_detect)/800, 1), "%", sep=""))
+  abline(h=0, lty=3)
+  convar_bygroup = tapply(contrast_table5[,contrast], contrast_detect, var)
+  mtext(side=1, at=1:2, text=round(convar_bygroup,4), line=-2)
+}
+```
+Those figures show below represent contrasts of different nodes 
+with group1(shift detected) and group2(shift not detected). 
+
+
+```{r,eval=FALSE}
+layout(matrix(1:4,2,2))
+contrast_plot(14,7) # edge 14, node 193, contrast 7
+contrast_plot(55,28)# edge 55, node 172, contrast 28
+contrast_plot(74,37) # edge 74, node 163, contrast 37
+contrast_plot(77,39) # edge 77, node 161, contrast 39
+
+contrast_plot(98,49) # edge 98, node 151, contrast 49
+contrast_plot(118,59)# edge 118, node 141, contrast 59
+contrast_plot(164,82)# edge 164, node 118, contrast 82
+contrast_plot(32,16)# last edge 32, node 184 , contrast 16
+
+```
+
+
+```{r}
+##layout for 2
+layout(matrix(c(1,2,3,2), 2, 2, byrow = TRUE), respect = TRUE)
+##layout for 3,4
+layout(matrix(1:2))
+
+ 
+
+```
